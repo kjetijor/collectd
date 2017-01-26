@@ -144,10 +144,11 @@ static int pnumdisk;
 
 static char *conf_udev_name_attr = NULL;
 static struct udev *handle_udev;
+static _Bool use_rbd_name = 0;
 #endif
 
 static const char *config_keys[] = {"Disk", "UseBSDName", "IgnoreSelected",
-                                    "UdevNameAttr"};
+                                    "UdevNameAttr", "UseRbdName"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
 static ignorelist_t *ignorelist = NULL;
@@ -184,7 +185,17 @@ static int disk_config(const char *key, const char *value) {
     WARNING("disk plugin: The \"UdevNameAttr\" option is only supported "
             "if collectd is built with libudev support");
 #endif
-  } else {
+  }
+  else if (strcasecmp ("UseRbdName", key) == 0) {
+#if HAVE_LIBUDEV
+    use_rbd_name = IS_TRUE (value) ? 1 : 0;
+#else
+    WARNING("disk plugin: The \"UseRbdName\" option is only supported "
+            "if collectd is built with libudev support")
+#endif
+  }
+  else
+  {
     return (-1);
   }
 
@@ -349,6 +360,34 @@ static char *disk_udev_attr_name(struct udev *udev, char *disk_name,
     udev_device_unref(dev);
   }
   return output;
+}
+
+#define MAX_RBD_NAME 128
+static char *disk_rbd_name(struct udev *udev, char *disk_name) {
+    char rbd_name[MAX_RBD_NAME];
+    const char *devlinks = disk_udev_attr_name(udev, disk_name, "DEVLINKS");
+
+    if ( devlinks == NULL ) {
+        return NULL;
+    }
+
+#define RBD_NAME_OFF 13
+    if ( 0 == strncmp("/dev/rbd/rbd/", devlinks, RBD_NAME_OFF) ) {
+        int off = 0;
+        char *ret = NULL;
+        while ( off < 128 &&
+                *(devlinks + RBD_NAME_OFF + off) != '\0' &&
+                *(devlinks + RBD_NAME_OFF + off) != ' ' &&
+                *(devlinks + RBD_NAME_OFF + off) != '\t' ) {
+            rbd_name[off] = *(devlinks + RBD_NAME_OFF + off);
+            off += 1;
+        }
+        ret = strdup(rbd_name);
+        DEBUG("disk plugin: renaming %s => %s", disk_name, ret);
+        return ret;
+    }
+#undef RBD_NAME_OFF
+    return NULL;
 }
 #endif
 
@@ -852,10 +891,186 @@ static int disk_read(void) {
     }
 #endif
 
+<<<<<<< Updated upstream
     if (ignorelist_match(ignorelist, output_name) != 0) {
 #if HAVE_UDEV_H
       /* release udev-based alternate name, if allocated */
       sfree(alt_name);
+=======
+	while (fgets (buffer, sizeof (buffer), fh) != NULL)
+	{
+		char *disk_name;
+		char *output_name;
+		char *alt_name;
+
+		numfields = strsplit (buffer, fields, 32);
+
+		if ((numfields != (14 + fieldshift)) && (numfields != 7))
+			continue;
+
+		minor = atoll (fields[1]);
+
+		disk_name = fields[2 + fieldshift];
+
+		for (ds = disklist, pre_ds = disklist; ds != NULL; pre_ds = ds, ds = ds->next)
+			if (strcmp (disk_name, ds->name) == 0)
+				break;
+
+		if (ds == NULL)
+		{
+			if ((ds = (diskstats_t *) calloc (1, sizeof (diskstats_t))) == NULL)
+				continue;
+
+			if ((ds->name = strdup (disk_name)) == NULL)
+			{
+				free (ds);
+				continue;
+			}
+
+			if (pre_ds == NULL)
+				disklist = ds;
+			else
+				pre_ds->next = ds;
+		}
+
+		is_disk = 0;
+		if (numfields == 7)
+		{
+			/* Kernel 2.6, Partition */
+			read_ops      = atoll (fields[3]);
+			read_sectors  = atoll (fields[4]);
+			write_ops     = atoll (fields[5]);
+			write_sectors = atoll (fields[6]);
+		}
+		else if (numfields == (14 + fieldshift))
+		{
+			read_ops  =  atoll (fields[3 + fieldshift]);
+			write_ops =  atoll (fields[7 + fieldshift]);
+
+			read_sectors  = atoll (fields[5 + fieldshift]);
+			write_sectors = atoll (fields[9 + fieldshift]);
+
+			if ((fieldshift == 0) || (minor == 0))
+			{
+				is_disk = 1;
+				read_merged  = atoll (fields[4 + fieldshift]);
+				read_time    = atoll (fields[6 + fieldshift]);
+				write_merged = atoll (fields[8 + fieldshift]);
+				write_time   = atoll (fields[10+ fieldshift]);
+
+				in_progress = atof (fields[11 + fieldshift]);
+
+				io_time       = atof (fields[12 + fieldshift]);
+				weighted_time = atof (fields[13 + fieldshift]);
+			}
+		}
+		else
+		{
+			DEBUG ("numfields = %i; => unknown file format.", numfields);
+			continue;
+		}
+
+		{
+			derive_t diff_read_sectors;
+			derive_t diff_write_sectors;
+
+		/* If the counter wraps around, it's only 32 bits.. */
+			if (read_sectors < ds->read_sectors)
+				diff_read_sectors = 1 + read_sectors
+					+ (UINT_MAX - ds->read_sectors);
+			else
+				diff_read_sectors = read_sectors - ds->read_sectors;
+			if (write_sectors < ds->write_sectors)
+				diff_write_sectors = 1 + write_sectors
+					+ (UINT_MAX - ds->write_sectors);
+			else
+				diff_write_sectors = write_sectors - ds->write_sectors;
+
+			ds->read_bytes += 512 * diff_read_sectors;
+			ds->write_bytes += 512 * diff_write_sectors;
+			ds->read_sectors = read_sectors;
+			ds->write_sectors = write_sectors;
+		}
+
+		/* Calculate the average time an io-op needs to complete */
+		if (is_disk)
+		{
+			derive_t diff_read_ops;
+			derive_t diff_write_ops;
+			derive_t diff_read_time;
+			derive_t diff_write_time;
+
+			if (read_ops < ds->read_ops)
+				diff_read_ops = 1 + read_ops
+					+ (UINT_MAX - ds->read_ops);
+			else
+				diff_read_ops = read_ops - ds->read_ops;
+			DEBUG ("disk plugin: disk_name = %s; read_ops = %"PRIi64"; "
+					"ds->read_ops = %"PRIi64"; diff_read_ops = %"PRIi64";",
+					disk_name,
+					read_ops, ds->read_ops, diff_read_ops);
+
+			if (write_ops < ds->write_ops)
+				diff_write_ops = 1 + write_ops
+					+ (UINT_MAX - ds->write_ops);
+			else
+				diff_write_ops = write_ops - ds->write_ops;
+
+			if (read_time < ds->read_time)
+				diff_read_time = 1 + read_time
+					+ (UINT_MAX - ds->read_time);
+			else
+				diff_read_time = read_time - ds->read_time;
+
+			if (write_time < ds->write_time)
+				diff_write_time = 1 + write_time
+					+ (UINT_MAX - ds->write_time);
+			else
+				diff_write_time = write_time - ds->write_time;
+
+			if (diff_read_ops != 0)
+				ds->avg_read_time += disk_calc_time_incr (
+						diff_read_time, diff_read_ops);
+			if (diff_write_ops != 0)
+				ds->avg_write_time += disk_calc_time_incr (
+						diff_write_time, diff_write_ops);
+
+			ds->read_ops = read_ops;
+			ds->read_time = read_time;
+			ds->write_ops = write_ops;
+			ds->write_time = write_time;
+		} /* if (is_disk) */
+
+		/* Don't write to the RRDs if we've just started.. */
+		ds->poll_count++;
+		if (ds->poll_count <= 2)
+		{
+			DEBUG ("disk plugin: (ds->poll_count = %i) <= "
+					"(min_poll_count = 2); => Not writing.",
+					ds->poll_count);
+			continue;
+		}
+
+		if ((read_ops == 0) && (write_ops == 0))
+		{
+			DEBUG ("disk plugin: ((read_ops == 0) && "
+					"(write_ops == 0)); => Not writing.");
+			continue;
+		}
+
+		output_name = disk_name;
+
+#if HAVE_LIBUDEV
+		if (use_rbd_name) {
+			alt_name = disk_rbd_name(handle_udev, disk_name);
+		}
+		if (alt_name == NULL) {
+		alt_name = disk_udev_attr_name (handle_udev, disk_name,
+				conf_udev_name_attr);
+		}
+#else
+		alt_name = NULL;
+>>>>>>> Stashed changes
 #endif
       continue;
     }

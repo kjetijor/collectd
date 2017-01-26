@@ -144,10 +144,12 @@ static int pnumdisk;
 
 static char *conf_udev_name_attr = NULL;
 static struct udev *handle_udev;
+static _Bool use_rbd_name = 0;
+#endif
 #endif
 
 static const char *config_keys[] = {"Disk", "UseBSDName", "IgnoreSelected",
-                                    "UdevNameAttr"};
+                                    "UdevNameAttr", "UseRbdName"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
 static ignorelist_t *ignorelist = NULL;
@@ -183,6 +185,13 @@ static int disk_config(const char *key, const char *value) {
 #else
     WARNING("disk plugin: The \"UdevNameAttr\" option is only supported "
             "if collectd is built with libudev support");
+#endif
+  } else if (strcasecmp ("UseRbdName", key) == 0) {
+#if HAVE_LIBUDEV
+    use_rbd_name = IS_TRUE (value) ? 1 : 0;
+#else
+    WARNING("disk plugin: The \"UseRbdName\" option is only supported "
+            "if collectd is built with libudev support")
 #endif
   } else {
     return (-1);
@@ -350,6 +359,35 @@ static char *disk_udev_attr_name(struct udev *udev, char *disk_name,
   }
   return output;
 }
+
+#define MAX_RBD_NAME 128
+static char *disk_rbd_name(struct udev *udev, char *disk_name) {
+    char rbd_name[MAX_RBD_NAME];
+    const char *devlinks = disk_udev_attr_name(udev, disk_name, "DEVLINKS");
+
+    if ( devlinks == NULL ) {
+        return NULL;
+    }
+
+#define RBD_NAME_OFF 13
+    if ( 0 == strncmp("/dev/rbd/rbd/", devlinks, RBD_NAME_OFF) ) {
+        int off = 0;
+        char *ret = NULL;
+        while ( off < 128 &&
+                *(devlinks + RBD_NAME_OFF + off) != '\0' &&
+                *(devlinks + RBD_NAME_OFF + off) != ' ' &&
+                *(devlinks + RBD_NAME_OFF + off) != '\t' ) {
+            rbd_name[off] = *(devlinks + RBD_NAME_OFF + off);
+            off += 1;
+        }
+        ret = strdup(rbd_name);
+        DEBUG("disk plugin: renaming %s => %s", disk_name, ret);
+        return ret;
+    }
+    return NULL;
+}
+#undef RBD_NAME_OFF
+#undef MAX_RBD_NAME
 #endif
 
 #if HAVE_IOKIT_IOKITLIB_H
@@ -844,7 +882,11 @@ static int disk_read(void) {
 
 #if HAVE_UDEV_H
     char *alt_name = NULL;
-    if (conf_udev_name_attr != NULL) {
+    if (use_rbd_name) {
+        if (NULL != (alt_name = disk_rbd_name(handle_udev, disk_name))) {
+            output_name = alt_name;
+        }
+    } else if (conf_udev_name_attr != NULL) {
       alt_name =
           disk_udev_attr_name(handle_udev, disk_name, conf_udev_name_attr);
       if (alt_name != NULL)

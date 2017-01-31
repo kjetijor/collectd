@@ -361,7 +361,6 @@ static char *disk_udev_attr_name(struct udev *udev, char *disk_name,
   return output;
 }
 
-#define MAX_RBD_NAME 128
 #define RBD_NAME_OFF 13
 static char *disk_rbd_name(struct udev *udev, char *disk_name) {
   const char *devlinks = disk_udev_attr_name(udev, disk_name, "DEVLINKS");
@@ -380,7 +379,6 @@ static char *disk_rbd_name(struct udev *udev, char *disk_name) {
   return NULL;
 }
 #undef RBD_NAME_OFF
-#undef MAX_RBD_NAME
 
 #endif
 

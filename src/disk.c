@@ -78,6 +78,8 @@
 #include <sys/protosw.h>
 #endif
 
+#include <string.h>
+
 #if HAVE_IOKIT_IOKITLIB_H
 static mach_port_t io_master_port = MACH_PORT_NULL;
 /* This defaults to false for backwards compatibility. Please fix in the next
@@ -362,8 +364,6 @@ static char *disk_udev_attr_name(struct udev *udev, char *disk_name,
 #define MAX_RBD_NAME 128
 #define RBD_NAME_OFF 13
 static char *disk_rbd_name(struct udev *udev, char *disk_name) {
-  char rbd_name[MAX_RBD_NAME];
-
   const char *devlinks = disk_udev_attr_name(udev, disk_name, "DEVLINKS");
 
   if ( devlinks == NULL ) {
@@ -371,21 +371,13 @@ static char *disk_rbd_name(struct udev *udev, char *disk_name) {
   }
 
   if ( 0 == strncmp("/dev/rbd/rbd/", devlinks, RBD_NAME_OFF) ) {
-    int off = 0;
-    char *ret = NULL;
-    while ( off < 128 &&
-            *(devlinks + RBD_NAME_OFF + off) != '\0' &&
-            *(devlinks + RBD_NAME_OFF + off) != ' ' &&
-            *(devlinks + RBD_NAME_OFF + off) != '\t' ) {
-      rbd_name[off] = *(devlinks + RBD_NAME_OFF + off);
-      off += 1;
+    char *ret = strdup(devlinks+RBD_NAME_OFF);
+    if ( ret ) {
+        INFO("disk plugin: renaming %s => %s", disk_name, ret);
+        return ret;
     }
-    rbd_name[off] = '\0';
-    ret = strdup(rbd_name);
-    DEBUG("disk plugin: renaming %s => %s", disk_name, ret);
-    return ret;
   }
-    return NULL;
+  return NULL;
 }
 #undef RBD_NAME_OFF
 #undef MAX_RBD_NAME

@@ -49,6 +49,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
+// #include <time.h>
 #include <unistd.h>
 #include <math.h>
 #include <inttypes.h>
@@ -165,6 +166,9 @@ static struct ceph_daemon **g_daemons = NULL;
 
 /** Number of elements in g_daemons */
 static int g_num_daemons = 0;
+
+/** Ceph collection interval */
+struct timeval ceph_collection_interval = {0, 0};
 
 /**
  * A set of data that we build up in memory while parsing the JSON.
@@ -758,6 +762,21 @@ static int cc_add_daemon_config(oconfig_item_t *ci)
     return 0;
 }
 
+static int cc_handle_struct_timeval(struct oconfig_item_s *item, struct timeval *dest) {
+    if(item->values_num != 1) {
+        return -ENOTSUP;
+    }
+    if(item->values[0].type != OCONFIG_TYPE_NUMBER) {
+        return -ENOTSUP;
+    }
+    if(item->values[0].value.number <= 0) {
+        return -ENOTSUP;
+    }
+    dest->tv_sec = item->values[0].value.number;
+    dest->tv_usec = (item->values[0].value.number - dest->tv_sec) * 1000000000;
+    return 0;
+}
+
 static int ceph_config(oconfig_item_t *ci)
 {
     int ret, i;
@@ -794,6 +813,15 @@ static int ceph_config(oconfig_item_t *ci)
             {
                 return ret;
             }
+        }
+        else if(strcasecmp("Interval", child->key) == 0) {
+            struct timeval tv;
+            ret = cc_handle_struct_timeval(child, &tv);
+            if(ret) {
+                memcpy(&ceph_collection_interval, &tv, sizeof(tv));
+                return ret;
+            }
+            ERROR("ceph plugin: failed to parse Interval");
         }
         else
         {

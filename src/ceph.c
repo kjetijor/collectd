@@ -168,7 +168,7 @@ static struct ceph_daemon **g_daemons = NULL;
 static int g_num_daemons = 0;
 
 /** Ceph collection interval */
-struct timeval ceph_collection_interval = {0, 0};
+struct timespec ceph_collection_interval = {0, 0};
 
 /**
  * A set of data that we build up in memory while parsing the JSON.
@@ -762,7 +762,7 @@ static int cc_add_daemon_config(oconfig_item_t *ci)
     return 0;
 }
 
-static int cc_handle_struct_timeval(struct oconfig_item_s *item, struct timeval *dest) {
+static int cc_handle_interval(struct oconfig_item_s *item, struct timespec *dest) {
     if(item->values_num != 1) {
         return -ENOTSUP;
     }
@@ -773,7 +773,7 @@ static int cc_handle_struct_timeval(struct oconfig_item_s *item, struct timeval 
         return -ENOTSUP;
     }
     dest->tv_sec = item->values[0].value.number;
-    dest->tv_usec = (item->values[0].value.number - dest->tv_sec) * 1000000000;
+    dest->tv_nsec = (item->values[0].value.number - dest->tv_sec) * 1000000000;
     return 0;
 }
 
@@ -815,13 +815,16 @@ static int ceph_config(oconfig_item_t *ci)
             }
         }
         else if(strcasecmp("Interval", child->key) == 0) {
-            struct timeval tv;
-            ret = cc_handle_struct_timeval(child, &tv);
+            struct timespec tv;
+            ret = cc_handle_interval(child, &tv);
             if(ret) {
-                memcpy(&ceph_collection_interval, &tv, sizeof(tv));
+                ERROR("ceph plugin: failed to parse Interval");
+                ceph_collection_interval.tv_sec = 0;
+                ceph_collection_interval.tv_nsec = 0;
                 return ret;
             }
-            ERROR("ceph plugin: failed to parse Interval");
+            ceph_collection_interval.tv_sec = tv.tv_sec;
+            ceph_collection_interval.tv_nsec = tv.tv_nsec;
         }
         else
         {
@@ -1606,11 +1609,24 @@ static int ceph_read(void)
     return cconn_main_loop(ASOK_REQ_DATA);
 }
 
+static int ceph_read_complex(user_data_t *ignoreme) {
+    return ceph_read();
+}
+
 /******* lifecycle *******/
 static int ceph_init(void)
 {
     int ret;
     ceph_daemons_print();
+
+    if((ceph_collection_interval.tv_sec > 0
+            && ceph_collection_interval.tv_nsec >= 0)
+        || (ceph_collection_interval.tv_sec == 0
+            && ceph_collection_interval.tv_nsec > 0)) {
+        plugin_register_complex_read(NULL, "ceph", ceph_read_complex, &ceph_collection_interval, NULL);
+    } else {
+        plugin_register_read("ceph", ceph_read);
+    }
 
     ret = cconn_main_loop(ASOK_REQ_VERSION);
 
@@ -1635,7 +1651,6 @@ void module_register(void)
 {
     plugin_register_complex_config("ceph", ceph_config);
     plugin_register_init("ceph", ceph_init);
-    plugin_register_read("ceph", ceph_read);
     plugin_register_shutdown("ceph", ceph_shutdown);
 }
 /* vim: set sw=4 sts=4 et : */
